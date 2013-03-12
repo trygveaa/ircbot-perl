@@ -60,6 +60,13 @@ sub irc_public {
                     $args =~ tr[a-zA-Z][n-za-mN-ZA-M];
                     print $server "NOTICE $channel :$nick: $args\n";
                 }
+                case "random" {
+                    if ($args =~ /^([0-9]+) ([0-9]+)$/) {
+                        print $server "NOTICE $channel :>> Random number: " . (rand($2-$1) + $1) . "\n";
+                    } else {
+                        print $server "NOTICE $channel :>> Invalid arguments. Usage: !random from to\n";
+                    }
+                }
                 case "op" {
                     if ($ircmask =~ /[^!]+!($allowed_ops)$/) {
                         print $server "MODE $channel +o $nick\n";
