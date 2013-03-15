@@ -56,6 +56,13 @@ sub irc_public {
             my $args = $2;
 
             switch ($command) {
+                case "op" {
+                    if ($ircmask =~ /[^!]+!($allowed_ops)$/) {
+                        print $server "MODE $channel +o $nick\n";
+                    } else {
+                        print $server "NOTICE $channel :$nick: You are not allowed.\n";
+                    }
+                }
                 case "rot13" {
                     $args =~ tr[a-zA-Z][n-za-mN-ZA-M];
                     print $server "NOTICE $channel :$nick: $args\n";
@@ -67,12 +74,6 @@ sub irc_public {
                         print $server "NOTICE $channel :>> Invalid arguments. Usage: !random from to\n";
                     }
                 }
-                case "op" {
-                    if ($ircmask =~ /[^!]+!($allowed_ops)$/) {
-                        print $server "MODE $channel +o $nick\n";
-                    } else {
-                        print $server "NOTICE $channel :$nick: You are not allowed.\n";
-                    }
                 }
                 case /today|tomorrow/ {
                     my $curl = new WWW::Curl::Easy;
