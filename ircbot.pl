@@ -15,117 +15,127 @@ use Ircparser;
 my $nickname = '';
 my $serveraddr = '';
 my @channels = ('');
+my $cmd_password = '';
 my %log_channels = ();
-my ($server, $run, $daemon, $say, $connected, $disconnecting, $newnick);
+my ($server, $daemon, $connected, $disconnecting, $newnick);
+
+$SIG{'TERM'} = "stop_bot";
+$SIG{'INT'} = "stop_bot";
+$SIG{'HUP'} = "reload_bot";
+
+
 
 BEGIN {
-    die "Usage: ircbot [-r] [-d] [-s text]\n"
+    die "Usage: ircbot [-d]\n"
         unless GetOptions(
-        'r|run' => \$run,
-        'd|daemon' => \$daemon,
-        's|say=s'  => \$say,
+            'd|daemon' => \$daemon,
         );
 
-    if ($run or $daemon) {
-        die "$0 lockfile already in place, quiting!" if -f '/var/lock/ircbot';
+    die "$0 lockfile already in place, quiting!" if -f '/var/lock/ircbot';
 
-        if ($daemon) {
-            $run = 1;
-            exit if (fork);
-            POSIX::setsid();
-            exit if (fork);
-            chdir "/";
-            umask 0;
+    if ($daemon) {
+        exit if (fork);
+        POSIX::setsid();
+        exit if (fork);
+        chdir "/";
+        umask 0;
 
-            open(STDIN, "+>/dev/null");
-            open LOG, ">>/var/log/ircbot/main"
-                or die "Could not open log file: $!";
-            *STDERR = *LOG;
-            *STDOUT = *LOG;
-            select(LOG);
-            $| = 1;
-            print LOG "---------- Opening Log ----------\n";
-        }
-
-        open LOCK, '>/var/lock/ircbot'
-            or die "Could not create lockfile: $!";
-        print LOCK $$;
-        close LOCK
-            or die "Could not close lockfile: $!";
-
-    } elsif (!$say) {
-        die "You must either run the bot, run it as a daemon or send text to the running bot.\n";
-        exit 1;
+        open(STDIN, "+>/dev/null");
+        open LOG, ">>/var/log/ircbot/main"
+            or die "Could not open log file: $!";
+        *STDERR = *LOG;
+        *STDOUT = *LOG;
+        select(LOG);
+        $| = 1;
+        print LOG "---------- Opening Log ----------\n";
     }
+
+    open LOCK, '>/var/lock/ircbot'
+        or die "Could not create lockfile: $!";
+    print LOCK $$;
+    close LOCK
+        or die "Could not close lockfile: $!";
 }
 
-if ($run) {
-    $SIG{'TERM'} = "stop_bot";
-    $SIG{'INT'} = "stop_bot";
-    $SIG{'HUP'} = "receive_command";
+while (!$disconnecting) {
+    while (not defined $server) {
+        $server = IO::Socket::INET->new(PeerAddr => $serveraddr, PeerPort => '6667', Proto => 'tcp', Timeout => 300);
+    }
+    logger("Connecting to " . $serveraddr);
+    print $server "USER $nickname $nickname $nickname $nickname\n";
+    print $server "NICK $nickname\n";
 
-    while (!$disconnecting) {
-        while (not defined $server) {
-            $server = IO::Socket::INET->new(PeerAddr => $serveraddr, PeerPort => '6667', Proto => 'tcp', Timeout => 300);
+    while (<$server>) {
+        s/[\r\n]*$//;
+        logger($_);
+        if (/004/) {
+            logger("Connected to " . $serveraddr);
+            $connected = 1;
+            last;
+        } elsif (/433|436|437/) {
+            $newnick = defined $newnick ? $newnick . "_" : $nickname . "_";
+            print $server "NICK $newnick\n";
         }
-        print $server "USER $nickname $nickname $nickname $nickname\n";
-        print $server "NICK $nickname\n";
+    }
 
+    for (@channels) {
+        print $server "JOIN $_\n";
+    }
+
+    my $pid;
+    if ($pid = fork()) {
         while (<$server>) {
             s/[\r\n]*$//;
-            logger($_);
-            if (/004/) {
-                logger("Connected to " . $serveraddr);
-                $connected = 1;
-                last;
-            } elsif (/433|436|437/) {
-                $newnick = defined $newnick ? $newnick . "_" : $nickname . "_";
-                print $server "NICK $newnick\n";
+            if (/^PING (.*)$/i) {
+                print $server "PONG $1\n";
+            } else {
+                logger($_);
+                if (/:([^ !]+)!.*PRIVMSG ([^ ]+) :?(.*)/) {
+                    if (!$log_channels{$2}) {
+                        open $log_channels{$2}, ">>/var/log/ircbot/$2.log" ;
+                        select((select($log_channels{$2}), $|=1)[0]);
+                    }
+                    my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst) = localtime(time);
+                    printf {$log_channels{$2}} "%04d-%02d-%02d %02d:%02d:%02d <%s> %s\n", $year+1900, $mon+1, $mday, $hour, $min, $sec, $1, $3;
+                }
+                handle_input($server, $_);
             }
         }
-
-        for (@channels) {
-            print $server "JOIN $_\n";
-        }
-
-        if ($daemon or my $pid = fork()) {
-            while (<$server>) {
-                s/[\r\n]*$//;
-                if (/^PING (.*)$/i) {
-                    print $server "PONG $1\n";
-                } else {
-                    logger($_);
-                    if (/:([^ !]+)!.*PRIVMSG ([^ ]+) :?(.*)/) {
-                        if (!$log_channels{$2}) {
-                            open $log_channels{$2}, ">>/var/log/ircbot/$2.log" ;
-                            select((select($log_channels{$2}), $|=1)[0]);
-                        }
-                        my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst) = localtime(time);
-                        printf {$log_channels{$2}} "%04d-%02d-%02d %02d:%02d:%02d <%s> %s\n", $year+1900, $mon+1, $mday, $hour, $min, $sec, $1, $3;
+    } else {
+        if ($daemon) {
+            my $listen = IO::Socket::INET->new(LocalPort => 54321, Proto => 'tcp', Reuse => 1, Listen => 10)
+                or die "Couldn't be a tcp server on port 54321: $!\n";
+            while(my $client = $listen->accept()) {
+                if (<$client> =~ /^pw $cmd_password$/) {
+                    while (<$client>) {
+                        logger($_);
+                        receive_command($_);
                     }
-                    handle_input($server, $_);
                 }
             }
         } else {
             while (<STDIN>) {
-                print $server $_;
+                logger($_);
+                receive_command($_);
             }
-            exit;
         }
-
-        undef $server;
+        exit;
     }
 
-} elsif ($say) {
-    open FILE, "/var/lock/ircbot" or die "Couldn't open lockfile: $!";
-    chomp (my $pid = <FILE>);
-    close FILE;
-    my $path = "/tmp/ircbot." . $pid;
-    POSIX::mkfifo($path, 0700) or die "Couldn't create fifo: $!";
-    kill HUP => $pid;
-    open FIFO, ">", $path or die "Couldn't open fifo: $!";
-    print FIFO $say;
-    close FIFO;
+    logger("Lost connection to " . $serveraddr);
+    undef $server;
+    kill 9, $pid;
+}
+
+sub receive_command {
+    my ($text) = @_;
+    if ($text =~ /^([^ ]+) (!.+)$/) {
+        irc_public($server, "bot!bot\@bot", $1, $1, $2);
+    } elsif ($text =~ /^(#?[a-z]+) (.+)$/) {
+        print $server "PRIVMSG $1 :$2\n";
+    } else {
+        print $server $text . "\n";
+    }
 }
 
 sub stop_bot {
@@ -139,23 +149,9 @@ sub stop_bot {
     }
 }
 
-sub receive_command {
-    my $path = "/tmp/ircbot." . $$;
-    open FIFO, $path or return;
-    chomp (my $text = <FIFO>);
-    close FIFO;
-    unlink $path;
-
-    if ($text eq "reload") {
-        my $refresher = Module::Refresh->new();
-        $refresher->refresh_module('Ircparser.pm');
-    } elsif ($text =~ /^([^ ]+) (!.+)$/) {
-        irc_public($server, "bot!bot\@bot", $1, $1, $2);
-    } elsif ($text =~ /^(#?[a-z]+) (.+)$/) {
-        print $server "PRIVMSG $1 :$2\n";
-    } else {
-        print $server $text . "\n";
-    }
+sub reload_bot {
+    my $refresher = Module::Refresh->new();
+    $refresher->refresh_module('Ircparser.pm');
 }
 
 sub logger {
@@ -166,16 +162,14 @@ sub logger {
 }
 
 END {
-    if ($run) {
-        if ($daemon) {
-            for (@channels) {
-                close $log_channels{$_};
-            }
-            print LOG "---------- Closing Log ----------\n";
-            close LOG
-                or die "Could not close log file: $!";
+    if ($daemon) {
+        for (@channels) {
+            close $log_channels{$_};
         }
-        unlink '/var/lock/ircbot'
-            or die "Could not delete lockfile: $!";
+        print LOG "---------- Closing Log ----------\n";
+        close LOG
+            or die "Could not close log file: $!";
     }
+    unlink '/var/lock/ircbot'
+        or die "Could not delete lockfile: $!";
 }
