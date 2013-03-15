@@ -74,6 +74,9 @@ sub irc_public {
                         print $server "NOTICE $channel :>> Invalid arguments. Usage: !random from to\n";
                     }
                 }
+                case "8ball" {
+                    my @choices = split /:/, $args;
+                    print $server "NOTICE $channel :$nick: " . $choices[rand @choices] . "\n";
                 }
                 case /today|tomorrow/ {
                     my $curl = new WWW::Curl::Easy;
