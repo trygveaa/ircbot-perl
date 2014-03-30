@@ -153,6 +153,7 @@ sub stop_bot {
 sub reload_bot {
     my $refresher = Module::Refresh->new();
     $refresher->refresh_module('Ircparser.pm');
+    logger("Reloaded parser");
 }
 
 sub logger {
