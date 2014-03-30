@@ -123,6 +123,7 @@ while (!$disconnecting) {
     }
 
     logger("Lost connection to " . $serveraddr);
+    $connected = 0;
     undef $server;
     kill 9, $pid;
 }
