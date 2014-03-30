@@ -116,14 +116,19 @@ sub irc_public {
                     $curl->setopt(CURLOPT_WRITEDATA, $fileb);
 
                     if ($curl->perform == 0) {
-                        if ($args) {
-                            $response_body =~ s/<\/?br?>/ /ig;
-                            $response_body =~ /(Maskin $args) *([^<]*)/;
-                            print $server "NOTICE $channel :>> $1: $2\n";
+                        my $err = $curl->errbuf;
+                        if ($err) {
+                            print $server "NOTICE $channel :>> Error: $err\n";
                         } else {
-                            my $free = 0;
-                            $free++ while ($response_body =~ /Maskin.*Ledig til/g);
-                            print $server "NOTICE $channel :>> Det er $free ledige maskiner.\n";
+                            if ($args) {
+                                $response_body =~ s/<\/?br?>/ /ig;
+                                $response_body =~ /(Maskin $args) *([^<]*)/;
+                                print $server "NOTICE $channel :>> $1: $2\n";
+                            } else {
+                                my $free = 0;
+                                $free++ while ($response_body =~ /Maskin.*Ledig til/g);
+                                print $server "NOTICE $channel :>> Det er $free ledige maskiner.\n";
+                            }
                         }
                     }
                 }
